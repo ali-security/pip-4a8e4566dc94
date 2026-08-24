@@ -13,6 +13,9 @@ pytest-xdist
 pyyaml
 scripttest
 setuptools>=39.2.0  # Needed for `setuptools.wheel.Wheel` support.
-https://github.com/pypa/virtualenv/archive/legacy.zip#egg=virtualenv
+# pypa/virtualenv's `legacy` branch was deleted upstream, so the archive URL
+# this line used to carry now 404s. `virtualenv<20` is the 16.7.x line that
+# branch tracked, and is what pip's own test helpers expect.
+virtualenv<20
 werkzeug==0.16.0
 wheel

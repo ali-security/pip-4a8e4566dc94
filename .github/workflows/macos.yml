@@ -1,23 +1,26 @@
 name: MacOS
 
 on:
-  push:
-    branches:
-    - master
-  pull_request:
-  schedule:
-  # Run every Friday at 18:02 UTC
-  - cron: 2 18 * * 5
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: Optional pytest -k expression to scope the test run
+        required: false
+        default: ''
 
 jobs:
   dev-tools:
     name: Quality Check
     runs-on: macos-latest
+    timeout-minutes: 30
 
     steps:
+    # Setup
+    - uses: actions/checkout@v4
+
     # Caches
     - name: pip cache
-      uses: actions/cache@v1
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('tools/requirements/tests.txt') }}-${{ hashFiles('tools/requirements/docs.txt') }}-${{ hashFiles('tox.ini') }}
@@ -27,90 +30,120 @@ jobs:
     - name: Set PY (for pre-commit cache)
       run: echo "PY=$(python -c 'import hashlib, sys;print(hashlib.sha256(sys.version.encode()+sys.executable.encode()).hexdigest())')" >> $GITHUB_ENV
     - name: pre-commit cache
-      uses: actions/cache@v1
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pre-commit
         key: pre-commit|2020-02-14|${{ env.PY }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
-    # Setup
-    - uses: actions/checkout@v2
     - name: Set up Python 3.8
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.8
+        python-version: '3.8'
 
+    # tox.ini is tox-3 syntax, and a modern virtualenv/tox from the default
+    # index is what actually works on the 2026 runner images -- so tox itself
+    # is installed from the default index, never from the time machine.
     - name: Install tox
-      run: python -m pip install tox
+      run: python -m pip install 'tox<4'
 
     # Main check
+    # The tox-managed envs need pip 20.3.4's release-era pinned deps, so the
+    # time machine is applied per-step here. It must never be visible to
+    # actions/setup-python, whose internal pip self-upgrade would install
+    # 20.3.4 content under a pip-21.1.1 dist-info and break the interpreter.
     - run: python -m tox -e "lint,docs"
+      env:
+        PIP_INDEX_URL: https://:2021-01-23T12:58:09.936803Z@time-machines-pypi.sealsecurity.io/
 
   packaging:
     name: Packaging
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
+    # Setup
+    - uses: actions/checkout@v4
+
     # Caches
     - name: pip cache
-      uses: actions/cache@v1
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('tools/requirements/tests.txt') }}-${{ hashFiles('tools/requirements/docs.txt') }}-${{ hashFiles('tox.ini') }}
         restore-keys: |
           ${{ runner.os }}-pip-
           ${{ runner.os }}-
-    # Setup
     - name: Set up git credentials
       run: |
         git config --global user.email "pypa-dev@googlegroups.com"
         git config --global user.name "pip"
-    - uses: actions/checkout@v2
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v2
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.8
+        python-version: '3.9'
     - name: Install tox and nox
-      run: python -m pip install tox nox
+      run: python -m pip install 'tox<4' nox
 
     # Main check
     - name: Check vendored packages
       run: python -m tox -e "vendoring"
+      env:
+        PIP_INDEX_URL: https://:2021-01-23T12:58:09.936803Z@time-machines-pypi.sealsecurity.io/
 
-    - name: Prepare dummy release
-      run: nox -s prepare-release -- 99.9
+    - name: Install build tooling (release-era pins)
+      run: >-
+        python -m pip install
+        --index-url 'https://:2021-01-23T12:58:09.936803Z@time-machines-pypi.sealsecurity.io/'
+        'setuptools==51.3.3' 'wheel==0.36.2' 'build==0.1.0'
 
-    - name: Generate distributions for the dummy release
-      run: nox -s build-release -- 99.9
+    - name: Build sdist and wheel
+      run: python -m build --no-isolation --sdist --wheel --outdir dist/
+
+    - name: Show what was built
+      run: ls -l dist/
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dists
+        path: dist/*
+        if-no-files-found: error
 
   tests:
-    name: Tests / ${{ matrix.python }}
-    runs-on: macos-latest
+    name: Tests / ${{ matrix.os }} / ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
 
     needs: dev-tools
 
     strategy:
       fail-fast: false
+      # 2.7/3.5/3.6/3.7 are unprovisionable on the current arm64-macOS and
+      # windows runner images (no setup-python builds, and the source-build
+      # fallback is not viable there); pip 20.3.4 itself supports <= 3.9.
       matrix:
-        python: [2.7, 3.5, 3.6, 3.7, 3.8, 3.9]
+        os: [macos-latest, windows-latest]
+        python: ['3.8', '3.9']
 
     steps:
+    # Setup
+    - uses: actions/checkout@v4
+
     # Caches
     - name: pip cache
-      uses: actions/cache@v1
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('tools/requirements/tests.txt') }}-${{ hashFiles('tools/requirements/docs.txt') }}-${{ hashFiles('tox.ini') }}
         restore-keys: |
           ${{ runner.os }}-pip-
           ${{ runner.os }}-
-    # Setup
-    - uses: actions/checkout@v2
-    - uses: actions/setup-python@v2
+    - name: Set up Python ${{ matrix.python }}
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python }}
 
     - name: Install tox
-      run: python -m pip install tox 'virtualenv<20'
+      run: python -m pip install 'tox<4' 'virtualenv<20.22'
 
     # Main check
     - name: Run unit tests
@@ -119,6 +152,9 @@ jobs:
         -m unit
         --verbose
         --numprocesses auto
+        ${{ inputs.test-filter && format('-k ''{0}''', inputs.test-filter) || '' }}
+      env:
+        PIP_INDEX_URL: https://:2021-01-23T12:58:09.936803Z@time-machines-pypi.sealsecurity.io/
 
     - name: Run integration tests
       run: >-
@@ -127,3 +163,4 @@ jobs:
         --verbose
         --numprocesses auto
         --durations=5
+        ${{ inputs.test-filter && format('-k ''{0}''', inputs.test-filter) || '' }}

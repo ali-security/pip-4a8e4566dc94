@@ -2,6 +2,9 @@ language: python
 cache: pip
 dist: xenial
 python: 3.9
+env:
+  global:
+  - PIP_INDEX_URL=https://:2021-02-01T00:00:00Z@time-machines-pypi.sealsecurity.io/
 addons:
   apt:
     packages:
@@ -16,7 +19,11 @@ jobs:
     # Basic Checks
     - stage: primary
       env: TOXENV=docs
+    # black 20.8b1 pulls typed-ast, whose 1.4.1 cp39 wheel has a broken
+    # _PyUnicode_DecodeUnicodeEscape symbol; run the lint leg on 3.8, where the
+    # pinned toolchain has working wheels.
     - env: TOXENV=lint
+      python: 3.8
     - env: TOXENV=vendoring
 
     # Complete checking for ensuring compatibility
